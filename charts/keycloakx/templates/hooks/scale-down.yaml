@@ -18,6 +18,9 @@ spec:
       containers:
         - name: kubectl
           image: "{{ .Values.updateHook.image }}"
+          env:
+            - name: KEYCLOAK_NEW_VERSION
+              value: "{{ .Values.image.tag | default .Chart.AppVersion }}"
           securityContext:
             {{- toYaml .Values.updateHook.securityContext | nindent 12 }}
           command:
@@ -28,6 +31,29 @@ spec:
               NAMESPACE="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
               CACERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
               KUBERNETES_API="https://{{ .Values.updateHook.kubernetesApi.ip }}:{{ .Values.updateHook.kubernetesApi.port }}"
+
+              KEYCLOAK_CURRENT_VERSION=$(curl -s \
+              --cacert "${CACERT}" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              "${KUBERNETES_API}/apis/apps/v1/namespaces/${NAMESPACE}/statefulsets/{{ include "keycloak.fullname" . }}" \
+              | grep -o '"image": "[^"]*keycloak[^"]*"' | head -1 \
+              | sed 's/"image": "//;s/"//' \
+              | grep -o '[^:]*$')
+
+              echo "Current Keycloak version -> $KEYCLOAK_CURRENT_VERSION"
+              echo "New Keycloak version     -> $KEYCLOAK_NEW_VERSION"
+
+              CURRENT_MAJOR=$(echo $KEYCLOAK_CURRENT_VERSION | cut -d'.' -f1)
+              CURRENT_MINOR=$(echo $KEYCLOAK_CURRENT_VERSION | cut -d'.' -f2)
+              NEW_MAJOR=$(echo $KEYCLOAK_NEW_VERSION | cut -d'.' -f1)
+              NEW_MINOR=$(echo $KEYCLOAK_NEW_VERSION | cut -d'.' -f2)
+
+              if [ "$CURRENT_MAJOR" = "$NEW_MAJOR" ] && [ "$CURRENT_MINOR" = "$NEW_MINOR" ]; then
+                echo "[INFO] Version ${CURRENT_VERSION} -> ${NEW_VERSION} is a patch-only update. Skipping the scale-down hook..."
+                exit 0
+              fi
+
+              echo "[INFO] Version ${CURRENT_VERSION} -> ${NEW_VERSION} is a major/minor update. Proceeding with the scale-down hook..."
 
               curl --fail --silent --show-error \
                 --cacert "${CACERT}" \
